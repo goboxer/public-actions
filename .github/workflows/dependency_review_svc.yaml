@@ -1,0 +1,137 @@
+name: 'Dependency Review - Services and Libraries'
+on:
+  workflow_call:
+    secrets:
+      GH_USERNAME:
+        required: true
+      GH_ACCESS_TOKEN:
+        required: true
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+jobs:
+  dependency-review-versions:
+    name: Review Versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Environment
+        run: env
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Review Versions
+        id: dependency_review_versions
+        run: |
+          echo "::group::Configure Git"
+          go env -w GOPRIVATE="github.com/goboxer/*"
+          echo "HOME=${HOME}"
+          echo "machine github.com login ${{ secrets.GH_USERNAME }} password ${{ secrets.GH_ACCESS_TOKEN }}" > ${HOME}/.netrc
+          cat ${HOME}/.netrc
+          echo "::endgroup::"
+
+          echo "::group::Install Go"
+          curl -L -o go1.18.3.linux-amd64.tar.gz https://dl.google.com/go/go1.18.3.linux-amd64.tar.gz
+          tar -C ${HOME} -xzf go1.18.3.linux-amd64.tar.gz
+          export PATH=${HOME}/go/bin:${PATH}
+          go version
+          echo "::endgroup::"
+
+          echo "::group::Downloading dependencies"
+          # error off since we use 'git diff' to determine changes
+          set +o errexit
+          go get -u all; go mod tidy
+          set -o errexit
+          echo "::endgroup::"
+
+          echo "::group::Checking for outdated dependencies"
+          TMP_GIT_STATUS_GO_MOD=$(git diff go.mod)
+          echo "::debug ::TMP_GIT_STATUS_GO_MOD=${TMP_GIT_STATUS_GO_MOD}"
+
+          if [ "${TMP_GIT_STATUS_GO_MOD}" == "" ]; then
+            echo "::notice ::Dependencies are NOT outdated"
+            echo "::set-output name=dependencies_outdated::false"
+
+            else
+              echo "::warning ::Dependencies are outdated"
+              echo "::set-output name=dependencies_outdated::true"
+          fi
+          echo "::endgroup::"
+        shell: bash
+      - name: Request PR Changes
+        if: ${{ steps.dependency_review_versions.outputs.dependencies_outdated == 'true' }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const outdatedMsg = "🔴 DEPENDENCIES OUTDATED 🔴"
+
+            let found = false
+
+            console.log("Checking list reviews API for existing review")
+            const res = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              per_page: 100, // Ignoring the edge case of many reviews, just means there are more comments but still only 1 ACK required
+              pull_number: context.issue.number,
+              repo: context.repo.repo
+            })
+            console.log("Received list reviews API response", res)
+
+            if (res && res.data) {
+              console.log("Found existing reviews, will check to see if 'DEPENDENCIES OUTDATED' review has already been made")
+              for (const v of res.data) {
+                if (v.body && v.body === outdatedMsg) {
+                  found = true
+                  break
+                }
+              }
+            }
+            console.log("Existing review from list reviews API?", found)
+
+            if (found) {
+              console.log("Existing 'DEPENDENCIES OUTDATED' review FOUND, will not add review")
+            } else {
+              console.log("Existing 'DEPENDENCIES OUTDATED' review NOT FOUND, will add review")
+
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                labels: [outdatedMsg],
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              })
+
+              github.rest.pulls.createReview({
+                body: outdatedMsg,
+                event: "REQUEST_CHANGES",
+                owner: context.repo.owner,
+                pull_number: context.issue.number,
+                repo: context.repo.repo
+              })
+            }
+      - name: Remove Dependencies Outdated Label
+        if: ${{ steps.dependency_review_versions.outputs.dependencies_outdated == 'false' }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const outdatedMsg = "🔴 DEPENDENCIES OUTDATED 🔴"
+
+            try {
+              const res = await github.rest.issues.getLabel({
+                name: outdatedMsg,
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              })
+              console.log("Received response from get labels API", res)
+
+              if (res && res.data && res.data.name) {
+                console.log("Found label, deleting...")
+                github.rest.issues.deleteLabel({
+                  name: outdatedMsg,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo
+                })
+              }
+
+            } catch (e) {
+              console.log("Received error response from get labels API, assuming label does not exist", e)
+            }

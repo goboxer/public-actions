@@ -1,0 +1,55 @@
+name: Repository Settings
+on:
+  workflow_call:
+    inputs:
+      required_status_checks:
+        required: true
+        type: string
+    secrets:
+      GH_USERNAME:
+        required: true
+      GH_ACCESS_TOKEN:
+        required: true
+permissions:
+  contents: read
+jobs:
+  apply-settings:
+    name: Apply Settings
+    runs-on: ubuntu-latest
+    steps:
+      - name: Environment
+        run: env
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Apply Settings
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_ACCESS_TOKEN }}
+          script: |
+            console.log("Invoking updateBranchProtection")
+            let settings = {
+              branch: "main",
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              allow_deletions: false,
+              allow_force_pushes: false,
+              block_creations: false,
+              enforce_admins: true,
+              required_conversation_resolution: true,
+              required_linear_history: true,
+              required_pull_request_reviews: {
+                dismissal_restrictions: undefined,
+                dismiss_stale_reviews: true,
+                require_code_owner_reviews: false,
+                required_approving_review_count: 1,
+                bypass_pull_request_allowances: undefined
+              },
+              required_signatures: false,
+              restrictions: null
+            }
+            settings["required_status_checks"] = {
+              strict: true,
+              checks: ${{ inputs.required_status_checks }}
+            }
+            const res = await github.rest.repos.updateBranchProtection(settings)
+            console.log("Received updateBranchProtection response", res)

@@ -1,0 +1,170 @@
+name: 'Dependency Review - Websites and Libraries'
+on:
+  workflow_call:
+    inputs:
+      skippable_dependency_locations:
+        required: true
+        type: string
+    secrets:
+      GH_USERNAME:
+        required: true
+      GH_ACCESS_TOKEN:
+        required: true
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+jobs:
+  dependency-review-versions:
+    name: Review Versions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Environment
+        run: env
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+      - name: Review Versions
+        id: dependency_review_versions
+        run: |
+          echo "::group::Configure Git"
+          echo "HOME=${HOME}"
+          echo "machine github.com login ${{ secrets.GH_USERNAME }} password ${{ secrets.GH_ACCESS_TOKEN }}" > ${HOME}/.netrc
+          cat ${HOME}/.netrc
+          echo "::endgroup::"
+
+          echo "::group::Install node.js"
+          curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.39.1/install.sh | bash
+          . ${HOME}/.nvm/nvm.sh
+          nvm install 16.16.0
+          echo "node version -> $(node --version)"
+          echo "npm version -> $(npm --version)"
+          node -e "console.log('Running Node.js ' + process.version)"
+          echo "::endgroup::"
+
+          echo "::group::Configure node.js"
+          echo "@goboxer:registry=https://npm.pkg.github.com/" > ${HOME}/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GH_ACCESS_TOKEN }}" >> ${HOME}/.npmrc
+          cat ${HOME}/.npmrc
+          echo "::endgroup::"
+
+          echo "::group::Downloading dependencies"
+          npm ci
+          echo "::endgroup::"
+
+          echo "::group::Checking for outdated dependencies"
+          set +o errexit
+          NPM_OUTDATED=$(npm outdated --location=project --json)
+          ERROR_CODE=$(echo $?)
+          set -o errexit
+
+          echo "NPM_OUTDATED=${NPM_OUTDATED}"
+
+          if [ "${ERROR_CODE}" -gt 0 ]; then
+            echo "Found outdated deps"
+
+            # Run `npm outdated --json` to determine the location of dependencies to ignore and put them in a comma separated list in alphabetical order
+            # For example:
+            # NPM_OUTDATED => { "foo": { "current": "24.9.0", "wanted": "24.9.0", "latest": "25.1.0", "location": "node_modules/@example/foo" }, "bar": { "current": "3.3.2", "wanted": "3.3.2", "latest": "3.4.0", "location": "node_modules/@example/bar" } }
+            # NPM_OUTDATED_SKIPPABLE_LOCATIONS="node_modules/@example/foo,node_modules/@example/bar"
+
+            echo "jq version -> $(jq --version)"
+
+            NPM_OUTDATED_LOCATIONS=$(echo ${NPM_OUTDATED} | jq -r '[.[]] | sort_by(.location) | [.[].location] | join(",")')
+            echo "NPM_OUTDATED_LOCATIONS=${NPM_OUTDATED_LOCATIONS}"
+
+            NPM_OUTDATED_SKIPPABLE_LOCATIONS="${{ inputs.skippable_dependency_locations }}"
+            echo "NPM_OUTDATED_SKIPPABLE_LOCATIONS=${NPM_OUTDATED_SKIPPABLE_LOCATIONS}"
+
+            if [ "${NPM_OUTDATED_LOCATIONS}" == "${NPM_OUTDATED_SKIPPABLE_LOCATIONS}" ]; then
+              echo "::notice ::ALL outdated deps are skippable"
+              echo "::set-output name=dependencies_outdated::false"
+
+              else
+                echo "::warning ::Dependencies are outdated and NOT ALL skippable"
+                echo "::set-output name=dependencies_outdated::true"
+            fi
+
+            else
+              echo "::notice ::Dependencies are NOT outdated"
+              echo "::set-output name=dependencies_outdated::false"
+          fi
+          echo "::endgroup::"
+        shell: bash
+      - name: Request PR Changes
+        if: ${{ steps.dependency_review_versions.outputs.dependencies_outdated == 'true' }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const outdatedMsg = "🔴 DEPENDENCIES OUTDATED 🔴"
+
+            let found = false
+
+            console.log("Checking list reviews API for existing review")
+            const res = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              per_page: 100, // Ignoring the edge case of many reviews, just means there are more comments but still only 1 ACK required
+              pull_number: context.issue.number,
+              repo: context.repo.repo
+            })
+            console.log("Received list reviews API response", res)
+
+            if (res && res.data) {
+              console.log("Found existing reviews, will check to see if 'DEPENDENCIES OUTDATED' review has already been made")
+              for (const v of res.data) {
+                if (v.body && v.body === outdatedMsg) {
+                  found = true
+                  break
+                }
+              }
+            }
+            console.log("Existing review from list reviews API?", found)
+
+            if (found) {
+              console.log("Existing 'DEPENDENCIES OUTDATED' review FOUND, will not add review")
+            } else {
+              console.log("Existing 'DEPENDENCIES OUTDATED' review NOT FOUND, will add review")
+
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                labels: [outdatedMsg],
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              })
+
+              github.rest.pulls.createReview({
+                body: outdatedMsg,
+                event: "REQUEST_CHANGES",
+                owner: context.repo.owner,
+                pull_number: context.issue.number,
+                repo: context.repo.repo
+              })
+            }
+      - name: Remove Dependencies Outdated Label
+        if: ${{ steps.dependency_review_versions.outputs.dependencies_outdated == 'false' }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const outdatedMsg = "🔴 DEPENDENCIES OUTDATED 🔴"
+
+            try {
+              const res = await github.rest.issues.getLabel({
+                name: outdatedMsg,
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              })
+              console.log("Received response from get labels API", res)
+
+              if (res && res.data && res.data.name) {
+                console.log("Found label, deleting...")
+                github.rest.issues.deleteLabel({
+                  name: outdatedMsg,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo
+                })
+              }
+
+            } catch (e) {
+              console.log("Received error response from get labels API, assuming label does not exist", e)
+            }
