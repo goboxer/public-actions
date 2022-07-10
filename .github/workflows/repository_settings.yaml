@@ -27,7 +27,7 @@ jobs:
           github-token: ${{ secrets.GH_ACCESS_TOKEN }}
           script: |
             console.log("Invoking updateBranchProtection")
-            let settings = {
+            const settings = {
               branch: "main",
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -45,11 +45,11 @@ jobs:
                 bypass_pull_request_allowances: undefined
               },
               required_signatures: false,
+              required_status_checks: {
+                strict: true,
+                checks: ${{ inputs.required_status_checks }}
+              },
               restrictions: null
-            }
-            settings["required_status_checks"] = {
-              strict: true,
-              checks: ${{ inputs.required_status_checks }}
             }
             const res = await github.rest.repos.updateBranchProtection(settings)
             console.log("Received updateBranchProtection response", res)
