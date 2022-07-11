@@ -139,7 +139,7 @@ jobs:
         if: ${{ steps.dependency_review_versions.outputs.dependencies_outdated == 'false' }}
         uses: actions/github-script@v6
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GH_ACCESS_TOKEN }}
           script: |
             const outdatedMsg = "🔴 DEPENDENCIES OUTDATED 🔴"
 
