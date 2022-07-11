@@ -99,7 +99,7 @@ jobs:
                 repo: context.repo.repo
               })
 
-              github.rest.pulls.createReview({
+              await github.rest.pulls.createReview({
                 body: outdatedMsg,
                 event: "REQUEST_CHANGES",
                 owner: context.repo.owner,
@@ -125,7 +125,7 @@ jobs:
 
               if (res && res.data && res.data.name) {
                 console.log("Found label, deleting...")
-                github.rest.issues.deleteLabel({
+                await github.rest.issues.deleteLabel({
                   name: outdatedMsg,
                   owner: context.repo.owner,
                   repo: context.repo.repo
@@ -134,4 +134,53 @@ jobs:
 
             } catch (e) {
               console.log("Received error response from get labels API, assuming label does not exist", e)
+            }
+      - name: Remove Dependencies Outdated Review
+        if: ${{ steps.dependency_review_versions.outputs.dependencies_outdated == 'false' }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const outdatedMsg = "🔴 DEPENDENCIES OUTDATED 🔴"
+
+            try {
+              let reviewId
+
+              console.log("Checking list reviews API for existing review")
+              const resListReviews = await github.rest.pulls.listReviews({
+                owner: context.repo.owner,
+                per_page: 100, // Ignoring the edge case of many reviews, just means there are more comments but still only 1 ACK required
+                pull_number: context.issue.number,
+                repo: context.repo.repo
+              })
+              console.log("Received list reviews API response", resListReviews)
+
+              if (resListReviews && resListReviews.data) {
+                console.log("Found existing reviews, will check to see if 'DEPENDENCIES OUTDATED' review has already been made")
+                for (const v of resListReviews.data) {
+                  if (v.body && v.body === outdatedMsg) {
+                    reviewId = v.id
+                    break
+                  }
+                }
+              }
+              console.log("Existing review from list reviews API?", reviewId ? true : false)
+
+              if (reviewId) {
+                console.log("Existing 'DEPENDENCIES OUTDATED' review FOUND, will dismiss review")
+                const resDismissReview = await github.rest.pulls.dismissReview({
+                  message: "🟢 DEPENDENCIES NOT OUTDATED 🟢",
+                  owner: context.repo.owner,
+                  pull_number: context.issue.number,
+                  repo: context.repo.repo,
+                  review_id: reviewId
+                })
+                console.log("Received dismiss review API response", resDismissReview)
+
+              } else {
+                console.log("Existing 'DEPENDENCIES OUTDATED' review NOT FOUND, nothing to do")
+              }
+
+            } catch (e) {
+              console.log("Received error response from listReviews or dismissReview API, assuming review does not exist", e)
             }
