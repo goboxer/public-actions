@@ -70,7 +70,7 @@ jobs:
             echo "jq version -> $(jq --version)"
 
             export stripPrefix="${GITHUB_WORKSPACE}/"
-            NPM_OUTDATED_LOCATIONS=$(echo ${NPM_OUTDATED} | jq -r '[.[]] | sort_by(.location) | [.[].location] | join(",") | sub(env.stripPrefix; "")')
+            NPM_OUTDATED_LOCATIONS=$(echo ${NPM_OUTDATED} | jq -r '[.[]] | sort_by(.location) | [.[].location] | join(",") | gsub(env.stripPrefix; "")')
             echo "NPM_OUTDATED_LOCATIONS=${NPM_OUTDATED_LOCATIONS}"
 
             # Strip ${GITHUB_WORKSPACE}
